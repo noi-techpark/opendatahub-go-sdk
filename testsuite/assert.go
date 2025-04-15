@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2024 NOI Techpark <digital@noi.bz.it>
 //
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: MPL-2.0
 
 package testsuite
 

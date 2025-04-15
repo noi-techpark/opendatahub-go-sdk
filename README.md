@@ -38,3 +38,23 @@ Pluggable Preconfigured Telemetry provider (tracing, metrics and logging).
 ## Package `testsuite`
 
 Helpers for testing OpenDataHub related logics.
+
+
+# How to create a release
+
+1. Create Tag
+```
+git tag -a <package>/v<version> -m "[message]"
+```
+
+2. Push Tag
+```
+git push origin <package>/v<version>
+```
+
+Example
+
+```
+git tag -a qmill/v1.0.0 -m "Release qmill v1.0.0"
+git push origin qmill/v1.0.0
+```
