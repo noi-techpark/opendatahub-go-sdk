@@ -163,6 +163,7 @@ func NewQmill(uri, client_name string, opts ...Option) (*QMill, error) {
 	}
 
 	config.Marshaler = newMarshalWrapper(decl.config.Queue.GenerateName(""))
+	config.TopologyBuilder = NewQMillTopologyBuilder(decl.forceExchange, decl.forceQueue)
 
 	// If any forced declaration or extra exchanges are requested, perform them now.
 	if decl.forceExchange || decl.forceQueue || decl.altExchange != "" || decl.deadLetterExchange != "" {
@@ -454,4 +455,32 @@ func (m marshalWrapper) Unmarshal(amqpMsg amqp091.Delivery) (*message.Message, e
 	msg.Metadata = cleanedMetadata
 
 	return msg, nil
+}
+
+type QMillTopologyBuilder struct {
+	declareExchange        bool
+	declareQueue           bool
+	defaultTopologyBuilder amqp.TopologyBuilder
+}
+
+func NewQMillTopologyBuilder(declareExchange, declareQueue bool) *QMillTopologyBuilder {
+	return &QMillTopologyBuilder{
+		declareExchange:        declareExchange,
+		declareQueue:           declareQueue,
+		defaultTopologyBuilder: &amqp.DefaultTopologyBuilder{},
+	}
+}
+
+func (b QMillTopologyBuilder) ExchangeDeclare(channel *amqp091.Channel, exchangeName string, config amqp.Config) error {
+	if !b.declareExchange {
+		return nil
+	}
+	return b.defaultTopologyBuilder.ExchangeDeclare(channel, exchangeName, config)
+}
+
+func (b QMillTopologyBuilder) BuildTopology(channel *amqp091.Channel, queueName string, exchangeName string, config amqp.Config, logger watermill.LoggerAdapter) error {
+	if !b.declareQueue {
+		return nil
+	}
+	return b.defaultTopologyBuilder.BuildTopology(channel, queueName, exchangeName, config, logger)
 }
