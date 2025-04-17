@@ -44,7 +44,7 @@ type QMill struct {
 // Option defines a function type that modifies the QMill.
 type Option func(*QMill)
 
-// WithExchangeName sets a fixed exchange name and the exchange type (e.g. "direct", "topic", "fanout").
+// WithExchange sets a fixed exchange name and the exchange type (e.g. "direct", "topic", "fanout").
 func WithExchange(name, exchangeType string, declare bool) Option {
 	return func(a *QMill) {
 		a.config.Exchange.GenerateName = func(_ string) string { return name }
