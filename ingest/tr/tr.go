@@ -94,10 +94,15 @@ func (tr *Tr[P]) handleDelivery(ctx context.Context, delivery *message.Message, 
 		return fmt.Errorf("invalid urn format in mq message: %s", msgBody.Urn)
 	}
 
+	// Inject URN in logger
+	ctx = logger.WithLogger(ctx, logger.Get(ctx).With(
+		"raw_data_urn", u.String(),
+	))
+
 	rawFrame, err := rdb.Get[P](tr.data_bridge, ctx, u)
 	if err != nil {
 		delivery.Nack()
-		return fmt.Errorf("cannot get raw data: %w", err)
+		return fmt.Errorf("cannot get raw data with urn %s: %w", u.String(), err)
 	}
 
 	err = handler(ctx, &rawFrame)

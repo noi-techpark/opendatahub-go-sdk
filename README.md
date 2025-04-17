@@ -58,3 +58,22 @@ Example
 git tag -a qmill/v1.0.0 -m "Release qmill v1.0.0"
 git push origin qmill/v1.0.0
 ```
+
+# How to correct a release
+
+1. Delete tag locally
+```
+git tag -d <package>/v<version>
+```
+
+2. Delete tag remote
+```
+git push origin --delete <package>/v<version>
+```
+
+Example
+
+```
+git tag -d ingest/v1.0.0
+git push origin --delete ingest/v1.0.0
+```
