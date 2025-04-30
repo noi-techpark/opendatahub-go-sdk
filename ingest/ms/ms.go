@@ -20,7 +20,7 @@ func InitWithEnv(ctx context.Context, env_prefix string, env interface{}) {
 	logger.InitLogging()
 	envconfig.MustProcess(env_prefix, env)
 
-	tel.NewTelemetryFromEnv(context.Background())
+	tel.NewTelemetryFromEnv(ctx)
 
 	if tel.Enabled() {
 		GracefullShutdowner(ctx, tel.Shutdown)
