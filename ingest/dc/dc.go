@@ -6,7 +6,6 @@ package dc
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -16,9 +15,7 @@ import (
 	"github.com/noi-techpark/opendatahub-go-sdk/ingest/ms"
 	"github.com/noi-techpark/opendatahub-go-sdk/ingest/rdb"
 	"github.com/noi-techpark/opendatahub-go-sdk/qmill"
-	"github.com/noi-techpark/opendatahub-go-sdk/tel"
 	"github.com/noi-techpark/opendatahub-go-sdk/tel/logger"
-	"go.opentelemetry.io/otel/trace"
 )
 
 type Env struct {
@@ -73,63 +70,31 @@ func (d *Dc[P]) GetInputChannel() chan<- Input[P] {
 	return d.input
 }
 
-func initializeSpans(ctx context.Context) (context.Context, *trace.Span, *trace.Span) {
-	// root server span to enable RED collection of the collector span
-	ctx, serverSpan := tel.TraceStart(
-		ctx,
-		fmt.Sprintf("%s.trigger", tel.GetServiceName()),
-		trace.WithSpanKind(trace.SpanKindServer),
-	)
-
-	// collect span creation
-	ctx, producerSpan := tel.TraceStart(
-		ctx,
-		fmt.Sprintf("%s.collect", tel.GetServiceName()),
-		trace.WithSpanKind(trace.SpanKindProducer),
-	)
-
-	return ctx, &serverSpan, &producerSpan
-}
-
 func (d *Dc[P]) Start(ctx context.Context, handler Handler[P]) error {
 	defer close(d.input)
 	for data := range d.input {
 		jobstart := time.Now()
-		ctx := data.ctx
 
-		// check if the provided context is already recording
-		root_span_is_recording := trace.SpanFromContext(ctx).IsRecording()
-		deferable_spans := make([]*trace.Span, 0)
-		if !root_span_is_recording {
-			ctx_, serverSpan, collectorSpan := initializeSpans(ctx)
-			deferable_spans = append(deferable_spans, serverSpan, collectorSpan)
-			ctx = ctx_
-		}
+		ctx, collection := d.StartCollection(data.ctx)
 
-		// logger uses root span if recording, otherwhise collectorSpan
-		ctx = logger.WithTracedLogger(ctx)
 		log := logger.Get(ctx)
 		log.Debug("collecting")
 
 		raw_data, err := handler(ctx, data.data)
-		ms.FailOnError(ctx, err, "failed to collect", "data", fmt.Sprintf("%v", data.data))
+		err = collection.Publish(ctx, raw_data)
+		ms.FailOnError(ctx, err, "failed to publish raw payload", "payload", fmt.Sprintf("%v", raw_data))
 
-		payload, err := json.Marshal(raw_data)
-		ms.FailOnError(ctx, err, "failed to marshal raw data", "data", fmt.Sprintf("%v", data.data))
-
-		err = d.pub.Publish(ctx, payload, "")
-		ms.FailOnError(ctx, err, "failed to publish raw data", "data", fmt.Sprintf("%v", data.data))
-
-		tel.OnSuccess(ctx)
 		log.Info("collection completed", "runtime_ms", time.Since(jobstart).Milliseconds())
 
-		// end all spans
-		for _, s := range deferable_spans {
-			(*s).End()
-		}
+		// end collection
+		collection.End(ctx)
 	}
 
 	err := errors.New("DC unexpected input channel close")
 	slog.Error(err.Error())
 	return err
+}
+
+func (d *Dc[P]) StartCollection(ctx context.Context) (context.Context, *Collection) {
+	return NewCollection(ctx, d.pub)
 }

@@ -23,7 +23,7 @@ func InitWithEnv(ctx context.Context, env_prefix string, env interface{}) {
 	tel.NewTelemetryFromEnv(ctx)
 
 	if tel.Enabled() {
-		GracefullShutdowner(ctx, tel.Shutdown)
+		GracefulShutdown(ctx, tel.Shutdown)
 	}
 }
 
@@ -43,7 +43,7 @@ func FailOnError(ctx context.Context, err error, msg string, args ...any) {
 
 type Finalizer func(context.Context)
 
-func GracefullShutdowner(ctx context.Context, finalizers ...Finalizer) {
+func GracefulShutdown(ctx context.Context, finalizers ...Finalizer) {
 	// gracefull shutdown
 	go func() {
 		sigs := make(chan os.Signal, 1)
