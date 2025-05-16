@@ -6,6 +6,10 @@ SPDX-License-Identifier: CC0-1.0
 
 # OpenDataHub Official Go SDK
 
+## Package `bdplib`
+
+BDP client to push data to Open Data Hub Timeseries.
+
 ## Package `ingest`
 
 ### Golang libs for Open Data Hub ingestion microservices
@@ -33,11 +37,14 @@ General utility boilerplate like logging, configuration and error handling
 
 ## Package `tel`
 
-Pluggable Preconfigured Telemetry provider (tracing, metrics and logging).
+Pluggable preconfigured Telemetry provider (tracing, metrics and logging).
 
 ## Package `testsuite`
 
 Helpers for testing OpenDataHub related logics.
+
+#### bdpmock
+Helpers to mock and test BDPLib calls.
 
 
 # How to create a release
