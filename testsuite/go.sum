@@ -1,4 +1,6 @@
 github.com/google/go-cmp v0.5.9 h1:O2Tfq5qg4qc4AmwVlvv0oLiVAGB7enBSJ2x2DqQFi38=
 github.com/google/go-cmp v0.5.9/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
+github.com/noi-techpark/opendatahub-go-sdk/bdplib v1.0.0 h1:x6CrJ0u4U5Rj9FtIiWYUYnMdRWBsd4mDjVkB8rJxKn4=
+github.com/noi-techpark/opendatahub-go-sdk/bdplib v1.0.0/go.mod h1:4YwQc1MFWD/KjFndfeB77JyROjC3lufAIXmWhBS1rGY=
 gotest.tools/v3 v3.5.2 h1:7koQfIKdy+I8UTetycgUqXWSDwpgv193Ka+qRsmBY8Q=
 gotest.tools/v3 v3.5.2/go.mod h1:LtdLGcnqToBH83WByAAi/wiwSFCArdFIUV/xxN4pcjA=
