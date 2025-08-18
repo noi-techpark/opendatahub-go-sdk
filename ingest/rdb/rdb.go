@@ -98,24 +98,11 @@ func Get[P any](rdb *RDBridge, ctx context.Context, urn *urn.URN) (Raw[P], error
 	if err != nil {
 		return Raw[P]{}, err
 	}
-	// First, unmarshal into a temporary structure where Rawdata is a string
-	var temp Raw[string]
-	err = json.Unmarshal(body, &temp)
+	var r Raw[P]
+	err = json.Unmarshal(body, &r)
 	if err != nil {
-		return Raw[P]{}, fmt.Errorf("failed to unmarshal raw data wrapper: %s", err.Error())
+		return Raw[P]{}, fmt.Errorf("failed to unmarshal raw data: %s", err.Error())
 	}
 
-	// Now, unmarshal Rawdata (which is a string) into the desired type P
-	var payload P
-	err = json.Unmarshal([]byte(temp.Rawdata), &payload)
-	if err != nil {
-		return Raw[P]{}, fmt.Errorf("failed to unmarshal rawdata field: %s", err.Error())
-	}
-
-	// Return properly typed Raw
-	return Raw[P]{
-		Provider:  temp.Provider,
-		Timestamp: temp.Timestamp,
-		Rawdata:   payload,
-	}, nil
+	return r, nil
 }

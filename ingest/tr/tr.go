@@ -114,3 +114,14 @@ func (tr *Tr[P]) handleDelivery(ctx context.Context, delivery *message.Message, 
 	delivery.Ack()
 	return nil
 }
+
+func RawString2JsonMiddleware[P any](h Handler[P]) Handler[string] {
+	return func(ctx context.Context, r *rdb.Raw[string]) error {
+		pRaw := rdb.Raw[P]{Provider: r.Provider, Timestamp: r.Timestamp}
+		err := json.Unmarshal([]byte(r.Rawdata), &pRaw.Rawdata)
+		if err != nil {
+			return fmt.Errorf("middleware failed parsing rawdata string to json: %w", err)
+		}
+		return h(ctx, &pRaw)
+	}
+}
