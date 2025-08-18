@@ -86,8 +86,8 @@ github.com/modern-go/reflect2 v1.0.2 h1:xBagoLtFs94CBntxluKeaWgTMpvLxC4ur3nMaC9G
 github.com/modern-go/reflect2 v1.0.2/go.mod h1:yWuevngMOJpCy52FWWMvUC8ws7m/LJsjYzDa0/r8luk=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
-github.com/noi-techpark/opendatahub-go-sdk/qmill v1.0.3 h1:ObaP8BMWlD+bcYfrX99l1g6K2wU0040ZPmRcu0DjpNA=
-github.com/noi-techpark/opendatahub-go-sdk/qmill v1.0.3/go.mod h1:iHTLcqZRJ21TiakPeH+eScQskx3w1KpG70GXKX+x9gE=
+github.com/noi-techpark/opendatahub-go-sdk/qmill v1.0.4 h1:m12YaN7btMyzM5Li+MPHDO1pSnPrK3AThFb+dDRuOfE=
+github.com/noi-techpark/opendatahub-go-sdk/qmill v1.0.4/go.mod h1:iHTLcqZRJ21TiakPeH+eScQskx3w1KpG70GXKX+x9gE=
 github.com/noi-techpark/opendatahub-go-sdk/tel v1.0.0 h1:qZNcndXyVDNMjm97UUHY83SE/ajxFb3EG8Fy0knYJVA=
 github.com/noi-techpark/opendatahub-go-sdk/tel v1.0.0/go.mod h1:UoUUz256zEhBDTyyaGbIdm9JHbDNMqUjrJArVkut4XY=
 github.com/oklog/ulid v1.3.1 h1:EGfNDEx6MqHz8B3uNV6QAib1UR2Lm97sHi3ocA6ESJ4=
