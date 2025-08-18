@@ -6,7 +6,7 @@ require (
 	github.com/ThreeDotsLabs/watermill v1.4.6
 	github.com/kelseyhightower/envconfig v1.4.0
 	github.com/leodido/go-urn v1.4.0
-	github.com/noi-techpark/opendatahub-go-sdk/qmill v1.0.2
+	github.com/noi-techpark/opendatahub-go-sdk/qmill v1.0.3
 	github.com/noi-techpark/opendatahub-go-sdk/tel v1.0.0
 	go.opentelemetry.io/otel/trace v1.35.0
 )
