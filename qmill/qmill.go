@@ -13,7 +13,6 @@ import (
 	"github.com/ThreeDotsLabs/watermill"
 	"github.com/ThreeDotsLabs/watermill-amqp/v2/pkg/amqp"
 	"github.com/ThreeDotsLabs/watermill/message"
-	"github.com/noi-techpark/opendatahub-go-sdk/ingest/ms"
 	"github.com/noi-techpark/opendatahub-go-sdk/tel"
 	"github.com/noi-techpark/opendatahub-go-sdk/tel/logger"
 	amqp091 "github.com/rabbitmq/amqp091-go"
@@ -362,6 +361,7 @@ func (q *QMill) Subscribe(ctx context.Context) error {
 	}
 
 	if !tel.Enabled() {
+		q.sub = inCh
 		return nil
 	}
 
@@ -408,7 +408,14 @@ func (q *QMill) FailOnError(err error, msg string, message *message.Message, arg
 	}
 
 	message.Nack()
-	ms.FailOnError(message.Context(), err, msg, args...)
+	ctx := message.Context()
+
+	tel.OnError(ctx, msg, err)
+	trace.SpanFromContext(ctx).End()
+
+	args_ := append([]any{"err", err}, args...)
+	logger.Get(ctx).Error(msg, args_...)
+	panic(err)
 }
 
 // marshalWrapper wraps the DefaultMarshaler but customizes Unmarshal.
