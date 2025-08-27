@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: CC0-1.0
 
-module opendatahub.com/el-air-quality-rating
+module github.com/noi-techpark/opendatahub-go-sdk/elab
 
-go 1.24.5
+go 1.23.0
 
 require (
 	github.com/noi-techpark/go-bdp-client v1.3.0
