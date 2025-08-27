@@ -20,21 +20,21 @@ import (
 )
 
 type Elaboration struct {
-	StationTypes       []string
-	Filter             string
-	OnlyActiveStations bool
-	BaseTypes          []BaseDataType
-	ElaboratedTypes    []ElaboratedDataType
-	StartingPoint      time.Time
-	b                  *bdplib.Bdp
-	c                  *odhts.C
+	StationTypes            []string
+	Filter                  string
+	IncludeInactiveStations bool
+	BaseTypes               []BaseDataType
+	ElaboratedTypes         []ElaboratedDataType
+	StartingPoint           time.Time
+	b                       *bdplib.Bdp
+	c                       *odhts.C
 }
 
 // arbitraty starting point where there should be no data yet
 var minTime = time.Date(2010, 1, 1, 0, 0, 0, 0, time.UTC)
 
 func NewElaboration(ts *odhts.C, bdp *bdplib.Bdp) Elaboration {
-	return Elaboration{b: bdp, c: ts, StartingPoint: minTime}
+	return Elaboration{b: bdp, c: ts, StartingPoint: minTime, IncludeInactiveStations: false}
 }
 
 type BaseDataType struct {
@@ -192,7 +192,7 @@ func (e Elaboration) buildStateRequest() *odhts.Request {
 	periodsStr := strings.Join(slices.Collect(maps.Keys(periods)), ",")
 
 	filters := []string{}
-	if e.OnlyActiveStations {
+	if !e.IncludeInactiveStations {
 		filters = append(filters, where.Eq("sactive", "true"))
 	}
 	if periodsStr != "" {
@@ -295,7 +295,7 @@ func (e Elaboration) buildHistoryRequest(stationtypes []string, stationcodes []s
 	}
 
 	filters := []string{}
-	if e.OnlyActiveStations {
+	if !e.IncludeInactiveStations {
 		filters = append(filters, where.Eq("sactive", "true"))
 	}
 	if len(periodsStr) > 0 {

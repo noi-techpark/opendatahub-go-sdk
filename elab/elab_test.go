@@ -31,8 +31,8 @@ func TestMapNinja2ElabTree(t *testing.T) {
 
 func TestElaboration_buildInitialStateRequest(t *testing.T) {
 	e := Elaboration{
-		Filter:             "scode.eq.\"123\"",
-		OnlyActiveStations: true,
+		Filter:                  "scode.eq.\"123\"",
+		IncludeInactiveStations: true,
 		BaseTypes: []BaseDataType{
 			{Name: "base1", Period: 60},
 			{Name: "base2", Period: 60},
