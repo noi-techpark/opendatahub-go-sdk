@@ -21,8 +21,10 @@ type elabBucket struct {
 }
 
 func scaleEstimate(before time.Duration, after time.Duration, estimate uint64) uint64 {
+	if estimate == 0 || before.Minutes() == 0 {
+		return 0
+	}
 	return uint64(after.Minutes() / before.Minutes() * float64(estimate))
-
 }
 
 func (e elabBucket) consolidate(drops uint64, station Station, from time.Time, to time.Time) elabBucket {
@@ -43,7 +45,9 @@ func (e elabBucket) consolidate(drops uint64, station Station, from time.Time, t
 	}
 
 	// estimates are made for a specific interval. If the bucket interval is different, the estimate has to be scaled accordingly
-	newBucket.drops = scaleEstimate(e.to.Sub(e.from), newBucket.to.Sub(newBucket.from), e.drops) + scaleEstimate(to.Sub(from), newBucket.to.Sub(newBucket.from), drops)
+	oldDrops := scaleEstimate(e.to.Sub(e.from), newBucket.to.Sub(newBucket.from), e.drops)
+	newDrops := scaleEstimate(to.Sub(from), newBucket.to.Sub(newBucket.from), drops)
+	newBucket.drops = oldDrops + newDrops
 	return newBucket
 }
 
@@ -121,7 +125,8 @@ func (f stationFollower) Elaborate(es ElaborationState, handle func(s Station, m
 				continue
 			}
 
-			// if it would overflow the bucket, go flush the old one first, and create a new bucket
+			// if it would overflowed the bucket, go flush the old one first, then create a new bucket
+			// this avoids bundling "small" stations with big ones
 			if estimatedMeasurements+bucket.drops > f.BucketMax {
 				wg.Add(1)
 				workers <- struct{}{}
@@ -131,7 +136,7 @@ func (f stationFollower) Elaborate(es ElaborationState, handle func(s Station, m
 				}()
 				bucket = elabBucket{stationtype: stationtype}
 			}
-			bucket.consolidate(estimatedMeasurements, st.Station, from, to)
+			bucket = bucket.consolidate(estimatedMeasurements, st.Station, from, to)
 		}
 
 		wg.Add(1)

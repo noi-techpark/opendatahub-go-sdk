@@ -87,10 +87,6 @@ type Station struct {
 	Metadata map[string]any `json:"smetadata"`
 }
 
-func (m *Measurement) UnmarshalJSON(bytes []byte) error {
-	panic("not implemented") // TODO: Implement
-}
-
 type MeasurementValueType int
 
 const (
