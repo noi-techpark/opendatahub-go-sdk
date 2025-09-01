@@ -136,6 +136,7 @@ func (f stationFollower) Elaborate(es ElaborationState, handle func(s Station, m
 				}()
 				bucket = elabBucket{stationtype: stationtype}
 			}
+			slog.Debug("Adding bucket to elaboration", "stationcode", st.Station.Stationcode, "from", from, "to", to)
 			bucket = bucket.consolidate(estimatedMeasurements, st.Station, from, to)
 		}
 
