@@ -329,7 +329,8 @@ func (e Elaboration) stationCatchupInterval(s ESStation) (from time.Time, to tim
 		if edt.Periods != nil {
 			per := edt.Periods[t.Period]
 			if to.Before(per) {
-				to = per
+				// add a milliseconds because interval of ninja is half-open, and we actually want to get the last record
+				to = per.Add(time.Millisecond)
 			}
 			// we assume that every period has a history for interval [from:per], and that records actually have that periodicity
 			if !per.IsZero() && t.Period > 0 {
