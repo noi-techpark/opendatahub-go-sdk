@@ -349,6 +349,9 @@ func (e Elaboration) stationCatchupInterval(s ESStation) (from time.Time, to tim
 
 // Push elaboration results to timeseries writer
 func (e Elaboration) PushResults(stationtype string, results []ElabResult) error {
+	if len(results) == 0 {
+		return nil
+	}
 	b := (*e.b)
 	dm := b.CreateDataMap()
 	for _, r := range results {
