@@ -130,10 +130,10 @@ func (f stationFollower) Elaborate(es ElaborationState, handle func(s Station, m
 			if estimatedMeasurements+bucket.drops > f.BucketMax {
 				wg.Add(1)
 				workers <- struct{}{}
-				go func() {
+				go func(b elabBucket) {
 					defer func() { <-workers; wg.Done() }()
-					bucket.flush(f.e, handle)
-				}()
+					b.flush(f.e, handle)
+				}(bucket)
 				bucket = elabBucket{stationtype: stationtype}
 			}
 			slog.Debug("Adding bucket to elaboration", "stationcode", st.Station.Stationcode, "from", from, "to", to)
@@ -142,10 +142,10 @@ func (f stationFollower) Elaborate(es ElaborationState, handle func(s Station, m
 
 		wg.Add(1)
 		workers <- struct{}{}
-		go func() {
+		go func(b elabBucket) {
 			defer func() { <-workers; wg.Done() }()
-			bucket.flush(f.e, handle)
-		}()
+			b.flush(f.e, handle)
+		}(bucket)
 		bucket = elabBucket{stationtype: stationtype}
 	}
 	wg.Wait()
