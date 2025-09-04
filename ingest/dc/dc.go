@@ -81,6 +81,7 @@ func (d *Dc[P]) Start(ctx context.Context, handler Handler[P]) error {
 		log.Debug("collecting")
 
 		raw_data, err := handler(ctx, data.data)
+		ms.FailOnError(ctx, err, "data collection handler returned error")
 		err = collection.Publish(ctx, raw_data)
 		ms.FailOnError(ctx, err, "failed to publish raw payload", "payload", fmt.Sprintf("%v", raw_data))
 
