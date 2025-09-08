@@ -23,7 +23,7 @@ type elabBucket struct {
 type loggableElabBucket struct {
 	StationType string
 	Drops       uint64
-	Stations    int
+	Stations    []Station
 	From        time.Time
 	To          time.Time
 }
@@ -32,7 +32,7 @@ func (b elabBucket) toLoggable() loggableElabBucket {
 	return loggableElabBucket{
 		StationType: b.stationtype,
 		Drops:       b.drops,
-		Stations:    len(b.stations),
+		Stations:    b.stations,
 		From:        b.from,
 		To:          b.to,
 	}
