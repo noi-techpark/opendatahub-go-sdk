@@ -5,6 +5,7 @@
 package elab
 
 import (
+	"fmt"
 	"log/slog"
 	"maps"
 	"slices"
@@ -20,11 +21,48 @@ type elabBucket struct {
 	to          time.Time
 }
 
+func (b elabBucket) String() string {
+	return fmt.Sprintf("stationtype: %s, drops: %d, stations: %d, from: %s, to: %s",
+		b.stationtype, b.drops, len(b.stations), b.from.Format(time.RFC3339), b.to.Format(time.RFC3339))
+}
+
 func scaleEstimate(before time.Duration, after time.Duration, estimate uint64) uint64 {
 	if estimate == 0 || before.Minutes() == 0 {
 		return 0
 	}
 	return uint64(after.Minutes() / before.Minutes() * float64(estimate))
+}
+
+// estimateStationFilterLength calculates the length of the encoded query parameter for a comma-separated and escaped list of station codes.
+// It accounts for the length of each station code, the surrounding double quotes, and the commas separating them.
+func (b elabBucket) estimateStationFilterLength() uint64 {
+	stations := map[string]Station{}
+	for _, st := range b.stations {
+		stations[st.Stationcode] = st
+	}
+
+	stationCodes := slices.Collect(maps.Keys(stations))
+
+	if len(stationCodes) == 0 {
+		return 0
+	}
+
+	// Calculate the total length of the station codes.
+	var totalLength uint64
+	for _, code := range stationCodes {
+		totalLength += uint64(len(code))
+	}
+
+	// Each station code is enclosed in double quotes. The length of one double quote character is 1.
+	// The total length of the quotes is 2 * the number of station codes.
+	quoteLength := uint64(len(stationCodes) * 2)
+
+	// The commas separating the station codes are escaped as "%2C" which has a length of 3 characters.
+	// The total length from escaped commas is (N - 1) * 3.
+	commaLength := uint64(len(stationCodes)-1) * 3
+
+	// The total length is the sum of the length of the station codes, the quotes, and the escaped commas.
+	return totalLength + quoteLength + commaLength
 }
 
 func (e elabBucket) consolidate(drops uint64, station Station, from time.Time, to time.Time) elabBucket {
@@ -127,7 +165,7 @@ func (f stationFollower) Elaborate(es ElaborationState, handle func(s Station, m
 
 			// if it would overflowed the bucket, go flush the old one first, then create a new bucket
 			// this avoids bundling "small" stations with big ones
-			if estimatedMeasurements+bucket.drops > f.BucketMax {
+			if estimatedMeasurements+bucket.drops > f.BucketMax || bucket.estimateStationFilterLength() > 1000 {
 				wg.Add(1)
 				workers <- struct{}{}
 				go func(b elabBucket) {
