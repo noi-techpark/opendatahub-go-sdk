@@ -5,7 +5,6 @@
 package elab
 
 import (
-	"fmt"
 	"log/slog"
 	"maps"
 	"slices"
@@ -21,9 +20,22 @@ type elabBucket struct {
 	to          time.Time
 }
 
-func (b elabBucket) String() string {
-	return fmt.Sprintf("stationtype: %s, drops: %d, stations: %d, from: %s, to: %s",
-		b.stationtype, b.drops, len(b.stations), b.from.Format(time.RFC3339), b.to.Format(time.RFC3339))
+type loggableElabBucket struct {
+	StationType string
+	Drops       uint64
+	Stations    int
+	From        time.Time
+	To          time.Time
+}
+
+func (b elabBucket) toLoggable() loggableElabBucket {
+	return loggableElabBucket{
+		StationType: b.stationtype,
+		Drops:       b.drops,
+		Stations:    len(b.stations),
+		From:        b.from,
+		To:          b.to,
+	}
 }
 
 func scaleEstimate(before time.Duration, after time.Duration, estimate uint64) uint64 {
@@ -104,7 +116,7 @@ func (b elabBucket) flush(e Elaboration, handle func(s Station, ms []Measurement
 	// request history for all stations in bucket at the same time
 	ms, err := e.RequestHistory([]string{b.stationtype}, slices.Collect(maps.Keys(stations)), dts, periods, b.from, b.to)
 	if err != nil {
-		slog.Error("failed requesting data. discarding bucket ...", "bucket", b, "err", err)
+		slog.Error("failed requesting data. discarding bucket ...", "bucket", b.toLoggable(), "err", err)
 		return
 	}
 
@@ -127,7 +139,7 @@ func (b elabBucket) flush(e Elaboration, handle func(s Station, ms []Measurement
 	}
 
 	if err := e.PushResults(b.stationtype, allResults); err != nil {
-		slog.Error("error pushing results", "bucket", b, "err", err)
+		slog.Error("error pushing results", "bucket", b.toLoggable(), "err", err)
 		return
 	}
 }
