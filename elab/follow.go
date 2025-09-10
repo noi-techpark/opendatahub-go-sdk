@@ -54,27 +54,7 @@ func (b elabBucket) estimateStationFilterLength() uint64 {
 	}
 
 	stationCodes := slices.Collect(maps.Keys(stations))
-
-	if len(stationCodes) == 0 {
-		return 0
-	}
-
-	// Calculate the total length of the station codes.
-	var totalLength uint64
-	for _, code := range stationCodes {
-		totalLength += uint64(len(code))
-	}
-
-	// Each station code is enclosed in double quotes. The length of one double quote character is 1.
-	// The total length of the quotes is 2 * the number of station codes.
-	quoteLength := uint64(len(stationCodes) * 2)
-
-	// The commas separating the station codes are escaped as "%2C" which has a length of 3 characters.
-	// The total length from escaped commas is (N - 1) * 3.
-	commaLength := uint64(len(stationCodes)-1) * 3
-
-	// The total length is the sum of the length of the station codes, the quotes, and the escaped commas.
-	return totalLength + quoteLength + commaLength
+	return estimateStationFilterLength(stationCodes)
 }
 
 func (e elabBucket) consolidate(drops uint64, station Station, from time.Time, to time.Time) elabBucket {
@@ -168,7 +148,7 @@ func (f stationFollower) Elaborate(es ElaborationState, handle func(s Station, m
 	for stationtype, stp := range es {
 		bucket := elabBucket{stationtype: stationtype}
 		for _, st := range stp.Stations {
-			from, to, estimatedMeasurements := f.e.stationCatchupInterval(st)
+			from, to, estimatedMeasurements := st.catchupInterval(f.e)
 			if !to.After(from) {
 				// No data or already caught up
 				slog.Debug("not computing anything for station", "station", st)

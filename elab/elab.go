@@ -241,6 +241,57 @@ type ESStation struct {
 	Datatypes map[string]ESDataType
 }
 
+func (s ESStation) catchupInterval(e Elaboration) (from time.Time, to time.Time, estimatedMeasurements uint64) {
+	return s.catchupIntervalForBaseType(e, nil)
+}
+
+func (s ESStation) catchupIntervalForBaseType(e Elaboration, baseTypeFilter *BaseDataType) (from time.Time, to time.Time, estimatedMeasurements uint64) {
+	for _, t := range e.ElaboratedTypes {
+		edt := s.Datatypes[t.Name]
+		if edt.Periods != nil {
+			per := edt.Periods[t.Period]
+			if from.IsZero() || from.After(per) {
+				from = per
+			}
+		}
+	}
+
+	baseTypesToProcess := e.BaseTypes
+	if baseTypeFilter != nil {
+		// If filter is provided, only process that specific base type
+		baseTypesToProcess = []BaseDataType{*baseTypeFilter}
+	}
+
+	for _, t := range baseTypesToProcess {
+		edt := s.Datatypes[t.Name]
+		if edt.Periods != nil {
+			per := edt.Periods[t.Period]
+			if to.Before(per) {
+				to = per
+			}
+			// we assume that every period has a history for interval [from:per], and that records actually have that periodicity
+			if !per.IsZero() && t.Period > 0 {
+				intervalSeconds := per.Sub(from).Seconds()
+				if intervalSeconds > 0 {
+					estimatedMeasurements += uint64(intervalSeconds) / t.Period
+				}
+			}
+		}
+	}
+	if from.IsZero() {
+		from = e.StartingPoint
+	}
+
+	// final check: we add a millisecond to "to" to get the last record only if the final "from" is really before "to"
+	// othersie we keep them as they are since it means the elaboration is up-to-date with the base types
+	if from.Before(to) {
+		// add a milliseconds because interval of ninja is half-open, and we actually want to get the last record
+		to = to.Add(time.Millisecond)
+	}
+
+	return
+}
+
 type ESDataType struct {
 	Periods map[Period]time.Time
 }
@@ -311,43 +362,6 @@ func (e Elaboration) buildHistoryRequest(stationtypes []string, stationcodes []s
 	return req
 }
 
-// we find the earliest elaborated type (e.g. the end of previous elaboration) and the latest base type
-// TODO: make this a method of ESStation
-func (e Elaboration) stationCatchupInterval(s ESStation) (from time.Time, to time.Time, estimatedMeasurements uint64) {
-	for _, t := range e.ElaboratedTypes {
-		edt := s.Datatypes[t.Name]
-		if edt.Periods != nil {
-			per := edt.Periods[t.Period]
-			if from.IsZero() || from.After(per) {
-				from = per
-			}
-		}
-	}
-
-	for _, t := range e.BaseTypes {
-		edt := s.Datatypes[t.Name]
-		if edt.Periods != nil {
-			per := edt.Periods[t.Period]
-			if to.Before(per) {
-				// add a milliseconds because interval of ninja is half-open, and we actually want to get the last record
-				to = per.Add(time.Millisecond)
-			}
-			// we assume that every period has a history for interval [from:per], and that records actually have that periodicity
-			if !per.IsZero() && t.Period > 0 {
-				intervalSeconds := per.Sub(from).Seconds()
-				if intervalSeconds > 0 {
-					estimatedMeasurements += uint64(intervalSeconds) / t.Period
-				}
-			}
-		}
-	}
-	if from.IsZero() {
-		from = e.StartingPoint
-	}
-
-	return
-}
-
 // Push elaboration results to timeseries writer
 func (e Elaboration) PushResults(stationtype string, results []ElabResult) error {
 	if len(results) == 0 {
@@ -359,4 +373,28 @@ func (e Elaboration) PushResults(stationtype string, results []ElabResult) error
 		dm.AddRecord(r.StationCode, r.DataType, bdplib.CreateRecord(r.Timestamp.UnixMilli(), r.Value, r.Period))
 	}
 	return b.PushData(stationtype, dm)
+}
+
+// estimateStationFilterLength calculates URL length for station codes (borrowed from elabBucket)
+func estimateStationFilterLength(stationCodes []string) uint64 {
+	if len(stationCodes) == 0 {
+		return 0
+	}
+
+	// Calculate the total length of the station codes.
+	var totalLength uint64
+	for _, code := range stationCodes {
+		totalLength += uint64(len(code))
+	}
+
+	// Each station code is enclosed in double quotes. The length of one double quote character is 1.
+	// The total length of the quotes is 2 * the number of station codes.
+	quoteLength := uint64(len(stationCodes) * 2)
+
+	// The commas separating the station codes are escaped as "%2C" which has a length of 3 characters.
+	// The total length from escaped commas is (N - 1) * 3.
+	commaLength := uint64(len(stationCodes)-1) * 3
+
+	// The total length is the sum of the length of the station codes, the quotes, and the escaped commas.
+	return totalLength + quoteLength + commaLength
 }
