@@ -1,0 +1,8 @@
+github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
+github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
+github.com/noi-techpark/go-bdp-client v1.3.1 h1:SKUsH2Ah4a5myuLtZhI4g53PHxlavWKKwzBHEPaMmDc=
+github.com/noi-techpark/go-bdp-client v1.3.1/go.mod h1:aooKwED49M7Au+9Y/o8wW/4yggIvaVRHc0JJvPnS10c=
+github.com/noi-techpark/go-timeseries-client v0.0.0-20250822084439-8aae699d91e0 h1:WsGKe9o0N4dgQrAzNR0moNs2UzjwSLNFge9KQgUKlj8=
+github.com/noi-techpark/go-timeseries-client v0.0.0-20250822084439-8aae699d91e0/go.mod h1:HzbXTeKGUegflWeRfgwfQFduX7P7YrZydBfVzeW0D4s=
+gotest.tools/v3 v3.5.1 h1:EENdUnS3pdur5nybKYIh2Vfgc8IUNBjxDPSjtiJcOzU=
+gotest.tools/v3 v3.5.1/go.mod h1:isy3WKz7GK6uNw/sbHzfKBLvlvXwUyV06n6brMxxopU=
