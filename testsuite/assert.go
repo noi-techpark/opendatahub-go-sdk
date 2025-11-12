@@ -6,9 +6,13 @@ package testsuite
 
 import (
 	"reflect"
+	"sort"
 	"testing"
 
+	"github.com/noi-techpark/opendatahub-go-sdk/bdplib"
+	"github.com/noi-techpark/opendatahub-go-sdk/testsuite/bdpmock"
 	"gotest.tools/v3/assert"
+	"gotest.tools/v3/assert/cmp"
 )
 
 // unifyNumbersToFloat walks any Go value (struct, map, slice, etc.) and returns
@@ -112,8 +116,69 @@ func isNumeric(rv reflect.Value) bool {
 	return false
 }
 
-func DeepEqualFromFile(t *testing.T, expected any, result any) {
-	expected = unifyNumbersToFloat(expected)
-	result = unifyNumbersToFloat(result)
-	assert.DeepEqual(t, expected, result)
+// normalizeDataMap sorts the records and recursively normalizes the branch.
+func normalizeDataMap(dm *bdplib.DataMap) {
+	// 1. Sort the Data slice by Timestamp
+	if dm != nil && dm.Data != nil {
+		sort.Slice(dm.Data, func(i, j int) bool {
+			return dm.Data[i].Timestamp < dm.Data[j].Timestamp
+		})
+	}
+
+	// 2. Recursively normalize the Branch
+	if dm != nil && dm.Branch != nil {
+		for _, branchDm := range dm.Branch {
+			// Take the address to modify it in place
+			branchDmCopy := branchDm
+			normalizeDataMap(&branchDmCopy)
+		}
+	}
+}
+
+// normalizeDataMapSlice normalizes each DataMap in the slice and then sorts the slice itself.
+func normalizeDataMapSlice(dmSlice []bdplib.DataMap) {
+	// First, normalize each individual DataMap
+	for i := range dmSlice {
+		normalizeDataMap(&dmSlice[i])
+	}
+
+	// Then, sort the entire slice by a stable key (e.g., Name)
+	sort.Slice(dmSlice, func(i, j int) bool {
+		return dmSlice[i].Name < dmSlice[j].Name
+	})
+}
+
+// Compare two BdpMockCalls structs for equality.
+func CompareBdpMockCalls(t *testing.T, expected, actual bdpmock.BdpMockCalls) {
+	// 1. Compare SyncedDataTypes
+	assert.Assert(t, cmp.DeepEqual(
+		unifyNumbersToFloat(expected.SyncedDataTypes), unifyNumbersToFloat(actual.SyncedDataTypes)), "SyncedDataTypes differ")
+
+	// 2. Compare SyncedData maps
+	assert.Equal(t, len(expected.SyncedData), len(actual.SyncedData), "SyncedData maps have different lengths")
+	for key, expectedData := range expected.SyncedData {
+		actualData, ok := actual.SyncedData[key]
+		assert.Assert(t, ok, "SyncedData is missing key: %s", key)
+		if !ok {
+			continue
+		}
+
+		normalizeDataMapSlice(expectedData)
+		normalizeDataMapSlice(actualData)
+		assert.Assert(t, cmp.DeepEqual(
+			unifyNumbersToFloat(expectedData), unifyNumbersToFloat(actualData)), "SyncedData for key %s differs", key)
+	}
+
+	// 3. Compare SyncedStations maps
+	assert.Equal(t, len(expected.SyncedStations), len(actual.SyncedStations), "SyncedStations maps have different lengths")
+	for key, expectedStations := range expected.SyncedStations {
+		actualStations, ok := actual.SyncedStations[key]
+		assert.Assert(t, ok, "SyncedStations is missing key: %s", key)
+		if !ok {
+			continue
+		}
+		// Use the spread operator '...' to pass the options.
+		assert.Assert(t, cmp.DeepEqual(
+			unifyNumbersToFloat(expectedStations), unifyNumbersToFloat(actualStations)), "SyncedStations for key %s differs", key)
+	}
 }
