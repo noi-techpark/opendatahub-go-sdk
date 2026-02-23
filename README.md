@@ -35,6 +35,10 @@ General utility boilerplate like logging, configuration and error handling
 
 [Watermill](https://github.com/ThreeDotsLabs/watermill) wrapper to semplify connection and interaction with RabbitMQ (AMPQ protocol).
 
+## Package `clib`
+
+Content API client library. Provides a configurable HTTP client for the OpenDataHub Content API with OAuth2, retries, and OpenTelemetry tracing. Includes tag synchronization utilities, deterministic ID generation, and generic paginated cache loading with hash-based change detection.
+
 ## Package `tel`
 
 Pluggable preconfigured Telemetry provider (tracing, metrics and logging).
