@@ -6,6 +6,7 @@ package tr
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -121,6 +122,22 @@ func RawString2JsonMiddleware[P any](h Handler[P]) Handler[string] {
 		err := json.Unmarshal([]byte(r.Rawdata), &pRaw.Rawdata)
 		if err != nil {
 			return fmt.Errorf("middleware failed parsing rawdata string to json: %w", err)
+		}
+		return h(ctx, &pRaw)
+	}
+}
+
+// RawBase64JsonMiddleware decodes a base64-encoded rawdata string, then JSON unmarshals it into the target type.
+func RawBase64JsonMiddleware[P any](h Handler[P]) Handler[string] {
+	return func(ctx context.Context, r *rdb.Raw[string]) error {
+		decoded, err := base64.StdEncoding.DecodeString(r.Rawdata)
+		if err != nil {
+			return fmt.Errorf("middleware failed decoding base64 rawdata: %w", err)
+		}
+		pRaw := rdb.Raw[P]{Provider: r.Provider, Timestamp: r.Timestamp}
+		err = json.Unmarshal(decoded, &pRaw.Rawdata)
+		if err != nil {
+			return fmt.Errorf("middleware failed parsing decoded rawdata to json: %w", err)
 		}
 		return h(ctx, &pRaw)
 	}
