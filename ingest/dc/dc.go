@@ -20,7 +20,7 @@ import (
 
 type Env struct {
 	PROVIDER       string
-	RAW_WRITER_URL string
+	RAW_WRITER_URL string `default:"http://raw-writer-2.core.svc.cluster.local"`
 	MQ_URI         string
 	MQ_EXCHANGE    string `default:"ingress"`
 	MQ_CLIENT      string
