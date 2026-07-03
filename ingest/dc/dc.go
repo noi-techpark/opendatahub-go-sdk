@@ -19,10 +19,11 @@ import (
 )
 
 type Env struct {
-	PROVIDER    string
-	MQ_URI      string
-	MQ_EXCHANGE string `default:"ingress"`
-	MQ_CLIENT   string
+	PROVIDER       string
+	RAW_WRITER_URL string
+	MQ_URI         string
+	MQ_EXCHANGE    string `default:"ingress"`
+	MQ_CLIENT      string
 }
 
 func PubFromEnv(ctx context.Context, e Env) (*qmill.QMill, error) {
@@ -97,5 +98,5 @@ func (d *Dc[P]) Start(ctx context.Context, handler Handler[P]) error {
 }
 
 func (d *Dc[P]) StartCollection(ctx context.Context) (context.Context, *Collection) {
-	return NewCollection(ctx, d.pub)
+	return NewCollection(ctx, d.config.RAW_WRITER_URL, d.config.PROVIDER)
 }

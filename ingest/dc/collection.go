@@ -5,26 +5,32 @@
 package dc
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
 
 	"github.com/noi-techpark/opendatahub-go-sdk/ingest/rdb"
-	"github.com/noi-techpark/opendatahub-go-sdk/qmill"
 	"github.com/noi-techpark/opendatahub-go-sdk/tel"
 	"github.com/noi-techpark/opendatahub-go-sdk/tel/logger"
 	"go.opentelemetry.io/otel/trace"
 )
 
 type Collection struct {
-	spans []*trace.Span
-	pub   *qmill.QMill
+	spans        []*trace.Span
+	rawWriterURL string
+	provider     string
 }
 
-func NewCollection(ctx context.Context, pub *qmill.QMill) (context.Context, *Collection) {
+func NewCollection(ctx context.Context, rawWriterURL, provider string) (context.Context, *Collection) {
 	c := &Collection{
-		spans: make([]*trace.Span, 0),
-		pub:   pub,
+		spans:        make([]*trace.Span, 0),
+		rawWriterURL: rawWriterURL,
+		provider:     provider,
 	}
 
 	// check if the provided context is already recording
@@ -41,12 +47,24 @@ func NewCollection(ctx context.Context, pub *qmill.QMill) (context.Context, *Col
 }
 
 func (c *Collection) Publish(ctx context.Context, raw_data *rdb.RawAny) error {
-	payload, err := json.Marshal(raw_data)
-	if err != nil {
-		return fmt.Errorf("failed to marshal raw_data: %s", err.Error())
+	var rawBytes []byte
+	switch v := raw_data.Rawdata.(type) {
+	case []byte:
+		rawBytes = v
+	case string:
+		rawBytes = []byte(v)
+	default:
+		var err error
+		rawBytes, err = json.Marshal(v)
+		if err != nil {
+			return fmt.Errorf("failed to marshal raw_data: %s", err.Error())
+		}
 	}
-
-	return c.pub.Publish(ctx, payload, "")
+	contentType := raw_data.ContentType
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	return sendRaw(c.rawWriterURL, c.provider, raw_data.Timestamp, rawBytes, contentType)
 }
 
 func (c *Collection) End(ctx context.Context) {
@@ -74,4 +92,31 @@ func initializeSpans(ctx context.Context) (context.Context, *trace.Span, *trace.
 	)
 
 	return ctx, &serverSpan, &producerSpan
+}
+
+func sendRaw(baseURL, provider string, timestamp time.Time, data []byte, contentType string) error {
+	parts := strings.SplitN(provider, "/", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("PROVIDER must be in the form 'provider1/provider2', got: %s", provider)
+	}
+	p1 := url.PathEscape(parts[0])
+	p2 := url.PathEscape(parts[1])
+	path := fmt.Sprintf("%s/%s/%s/%s", baseURL, p1, p2, url.PathEscape(timestamp.UTC().Format(time.RFC3339)))
+	req, err := http.NewRequest(http.MethodPost, path, bytes.NewBuffer(data))
+	if err != nil {
+		return fmt.Errorf("could not create raw writer request: %w", err)
+	}
+	req.Header.Set("User-Agent", tel.GetServiceName())
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("raw writer request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("raw writer returned non-2xx status %d", resp.StatusCode)
+	}
+	return nil
 }
