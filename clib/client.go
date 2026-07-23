@@ -40,11 +40,22 @@ type Config struct {
 // requests to the Content API. It is safe for concurrent use across goroutines.
 type ContentClient struct {
 	BaseURL string
+	Referer string
 	client  *retryablehttp.Client
 }
 
+// ClientOption customizes a ContentClient at construction time.
+type ClientOption func(*ContentClient)
+
+// WithReferer sets the HTTP Referer header sent with every request.
+func WithReferer(referer string) ClientOption {
+	return func(c *ContentClient) {
+		c.Referer = referer
+	}
+}
+
 // NewContentClient creates a new, configured ContentClient.
-func NewContentClient(cfg Config) (*ContentClient, error) {
+func NewContentClient(cfg Config, opts ...ClientOption) (*ContentClient, error) {
 	baseURL, err := url.Parse(cfg.BaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid base URL: %w", err)
@@ -92,10 +103,16 @@ func NewContentClient(cfg Config) (*ContentClient, error) {
 		baseURL.Path += "/"
 	}
 
-	return &ContentClient{
+	client := &ContentClient{
 		BaseURL: baseURL.String(),
 		client:  retryClient,
-	}, nil
+	}
+
+	for _, opt := range opts {
+		opt(client)
+	}
+
+	return client, nil
 }
 
 // contentApiSpan creates and starts a new OpenTelemetry span for an API call.
@@ -137,6 +154,10 @@ func (c *ContentClient) doRequest(ctx context.Context, method string, reqURL str
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+
+	if c.Referer != "" {
+		req.Header.Set("Referer", c.Referer)
+	}
 
 	resp, err := c.client.Do(req)
 	if err != nil {
