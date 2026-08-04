@@ -75,6 +75,14 @@ func HashEntity[T any](entity T) (uint64, error) {
 	return hashstructure.Hash(entity, hashstructure.FormatV2, nil)
 }
 
+// DefaultSortBy is the sort applied to paginated loads when the consumer does
+// not choose one. The Content API's default page order is not stable across
+// pagenumber requests, so paginating without an explicit sort makes pages
+// overlap: some entities come back more than once and others are never
+// returned at all. Any total order over the result set avoids that, and "Id"
+// is present on every Content API entity.
+const DefaultSortBy = "Id"
+
 // LoadConfig configures paginated loading of existing entities from the Content API.
 type LoadConfig[T any] struct {
 	// EntityType is the Content API entity type path (e.g., "Announcement", "Trip").
@@ -87,6 +95,13 @@ type LoadConfig[T any] struct {
 	// Fully consumer-controlled (e.g., {"active": "true", "source": "A22"}).
 	QueryParams map[string]string
 
+	// SortBy pins the order the pages are walked in, as the Content API
+	// "rawsort" parameter. It must be a total order over the result set or the
+	// load silently returns fewer distinct entities than it claims.
+	// Defaults to DefaultSortBy; a "rawsort" already present in QueryParams is
+	// honoured when this is empty.
+	SortBy string
+
 	// IDFunc extracts the unique ID from an entity for use as the cache map key.
 	// Required.
 	IDFunc func(T) string
@@ -94,13 +109,21 @@ type LoadConfig[T any] struct {
 
 // paginatedResponse is the expected response format from the Content API.
 type paginatedResponse[T any] struct {
-	Items       []T `json:"Items"`
-	TotalPages  int `json:"TotalPages"`
-	CurrentPage int `json:"CurrentPage"`
+	Items        []T `json:"Items"`
+	TotalResults int `json:"TotalResults"`
+	TotalPages   int `json:"TotalPages"`
+	CurrentPage  int `json:"CurrentPage"`
 }
 
 // LoadExisting fetches all entities matching QueryParams via paginated GET requests,
 // hashes each one, and returns a populated Cache.
+//
+// The walk is pinned to a deterministic order (see LoadConfig.SortBy) and the
+// number of entities actually cached is checked against the TotalResults the
+// API reports. A partially loaded cache is not a degraded cache: callers use it
+// to decide which entities have disappeared upstream, so a missing entity is
+// indistinguishable from one that was never there. That silently corrupts data,
+// hence an incomplete load is an error rather than a shorter result.
 func LoadExisting[T any](ctx context.Context, client ContentAPI, cfg LoadConfig[T]) (*Cache[T], error) {
 	cache := NewCache[T]()
 
@@ -110,7 +133,9 @@ func LoadExisting[T any](ctx context.Context, client ContentAPI, cfg LoadConfig[
 	}
 
 	currentPage := 1
-	totalPages := 1 // will be updated from response
+	totalPages := 1   // will be updated from response
+	totalResults := 0 // will be updated from response
+	rows := 0
 
 	for currentPage <= totalPages {
 		params := make(map[string]string)
@@ -119,6 +144,13 @@ func LoadExisting[T any](ctx context.Context, client ContentAPI, cfg LoadConfig[
 		}
 		params["pageSize"] = fmt.Sprintf("%d", pageSize)
 		params["pagenumber"] = fmt.Sprintf("%d", currentPage)
+
+		switch {
+		case cfg.SortBy != "":
+			params["rawsort"] = cfg.SortBy
+		case params["rawsort"] == "":
+			params["rawsort"] = DefaultSortBy
+		}
 
 		var res paginatedResponse[T]
 		err := client.Get(ctx, cfg.EntityType, params, &res)
@@ -135,8 +167,17 @@ func LoadExisting[T any](ctx context.Context, client ContentAPI, cfg LoadConfig[
 			cache.Set(id, item, hash)
 		}
 
+		rows += len(res.Items)
+		totalResults = res.TotalResults
 		totalPages = res.TotalPages
 		currentPage++
+	}
+
+	if cached := len(cache.Entries()); cached != totalResults {
+		return nil, fmt.Errorf(
+			"incomplete load of %s: API reports %d entities, cached %d (%d rows over %d pages) - "+
+				"the page order is not a total order, set LoadConfig.SortBy to a field that is",
+			cfg.EntityType, totalResults, cached, rows, totalPages)
 	}
 
 	return cache, nil
