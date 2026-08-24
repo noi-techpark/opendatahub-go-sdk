@@ -185,21 +185,6 @@ func (t *Table[T]) Ready() <-chan struct{} { return t.readyCh }
 func (t *Table[T]) bootstrap(ctx context.Context) error {
 	log := logger.Get(ctx)
 
-	// Declare the index this table's queries need, every startup. The call is
-	// idempotent, so nothing has to remember whether it was made before.
-	//
-	// A failure here is not fatal: without the index the compacted query is
-	// still correct, just slower, and refusing to start over a performance
-	// concern would be worse than the concern. It is logged loudly because a
-	// table that scans on every sweep is a problem that grows quietly.
-	if created, err := t.bridge.EnsureCompactedIndex(ctx, t.cfg.DB, t.cfg.Collection, t.cfg.Key); err != nil {
-		log.Warn("could not declare the compacted index; queries will scan",
-			"table", t.cfg.Name, "field", t.cfg.Key, "err", err)
-	} else if created {
-		log.Info("compacted index created for reference table",
-			"table", t.cfg.Name, "field", t.cfg.Key)
-	}
-
 	cursor := ""
 	pages, applied := 0, 0
 
