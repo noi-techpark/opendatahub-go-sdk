@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,11 +30,25 @@ type Raw[Rawtype any] struct {
 	Timestamp   time.Time `json:"timestamp"`
 	Rawdata     Rawtype   `json:"rawdata"`
 	ContentType string    `json:"content_type"`
+
+	// Meta carries publisher-set fields that are not part of the payload.
+	//
+	// On the way out they travel as X-OpenDataHub-<name> headers; the raw writer
+	// strips that prefix, lowercases what is left, and stores the result in the
+	// document's `meta` sub-document — which is also where it is read back from.
+	// Use lowercase keys, since that is what comes back regardless of what was
+	// sent.
+	//
+	// This is the only place a collector can put a field the database is able to
+	// group on, which is what makes keyed lookups (RDBridge.GetLatest) possible
+	// without reaching into the payload.
+	Meta map[string]string `json:"meta,omitempty"`
 }
 
 var (
 	ErrDocumentNotFound = errors.New("document not found")
 	ErrBadURN           = errors.New("bad urn format")
+	ErrBadRequest       = errors.New("bad request")
 	ErrServerErr        = errors.New("internal server error")
 )
 
@@ -94,6 +110,126 @@ func (b RDBridge) Get(ctx context.Context, urn *urn.URN) ([]byte, error) {
 	return body, nil
 }
 
+// LatestQuery addresses the compacted view of a raw data collection: the newest
+// document for every distinct value of a BSON field.
+type LatestQuery struct {
+	DB         string
+	Collection string
+	// Field names a field inside the stored document's `meta` sub-document,
+	// which the bridge groups on. Not a path, and not a field at the document
+	// root: a payload posted as application/json is stored as a string, so
+	// nothing inside it can be grouped on, and the rest of the root belongs to
+	// the writer. A collector sets it by sending an X-OpenDataHub-<Field>
+	// header.
+	Field string
+	// Since and Until bound the scan by write time: Since is exclusive, Until
+	// inclusive, so consecutive windows tile without gaps or overlap. Use them
+	// to catch up, or to step through the log a window at a time.
+	//
+	// They are filters, not cursors, and are applied before grouping — so a
+	// bounded query returns the newest document per key *within the window*. A
+	// key written years ago and never touched since still has a current value,
+	// so a consumer starting cold must leave both unset and page through the
+	// whole compacted set.
+	Since *time.Time
+	Until *time.Time
+	// Cursor continues a previous page. It is opaque — the bridge derives it
+	// beside the ordering that produced it, so pass back the previous page's
+	// Next unchanged and do not attempt to construct one.
+	Cursor string
+	Limit  int
+}
+
+// LatestPage is one page of a compacted collection view.
+//
+// Items are whole documents, undecoded. Their layout is the publisher's
+// choice — the identifying fields live at the root and the payload sits in
+// `rawdata`, possibly base64-encoded — so the client does not presume a shape.
+type LatestPage struct {
+	Items []json.RawMessage
+	// HighWater is the newest write observed in this page. Store it and pass it
+	// back as LatestQuery.Since to pick up only subsequent changes.
+	HighWater *time.Time
+	// Next is empty when the walk is complete.
+	Next string
+}
+
+type latestEnvelope struct {
+	Field     string            `json:"field"`
+	Count     int               `json:"count"`
+	HighWater *time.Time        `json:"highWater"`
+	Next      string            `json:"next"`
+	Data      []json.RawMessage `json:"data"`
+}
+
+func (b RDBridge) getLatest(ctx context.Context, q LatestQuery) ([]byte, error) {
+	params := url.Values{}
+	if q.Since != nil {
+		params.Set("since", q.Since.UTC().Format(time.RFC3339))
+	}
+	if q.Until != nil {
+		params.Set("until", q.Until.UTC().Format(time.RFC3339))
+	}
+	if q.Cursor != "" {
+		params.Set("cursor", q.Cursor)
+	}
+	if q.Limit > 0 {
+		params.Set("limit", strconv.Itoa(q.Limit))
+	}
+
+	target := fmt.Sprintf("%s/%s/%s/compacted/%s?%s",
+		b.endpoint, url.PathEscape(q.DB), url.PathEscape(q.Collection),
+		url.PathEscape(q.Field), params.Encode())
+
+	ctx, clientSpan := tel.TraceStart(
+		ctx,
+		fmt.Sprintf("HTTP GET /%s/%s/compacted/%s", q.DB, q.Collection, q.Field),
+		trace.WithSpanKind(trace.SpanKindClient),
+	)
+	defer clientSpan.End()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", target, nil)
+	if err != nil {
+		tel.OnError(ctx, "failed to create request", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := httptel.NewHttpTelClient().Do(req)
+	if err != nil {
+		tel.OnError(ctx, "failed to get latest raw data", err)
+		return nil, fmt.Errorf("failed to get latest raw data: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusBadRequest {
+		return nil, fmt.Errorf("%w: db=%q collection=%q field=%q", ErrBadRequest, q.DB, q.Collection, q.Field)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%w: status %d", ErrServerErr, resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		tel.OnError(ctx, "failed to read latest raw data body", err)
+		return nil, fmt.Errorf("failed to read latest raw data body: %w", err)
+	}
+	return body, nil
+}
+
+// GetLatest fetches one page of a collection's compacted view.
+func (b RDBridge) GetLatest(ctx context.Context, q LatestQuery) (LatestPage, error) {
+	body, err := b.getLatest(ctx, q)
+	if err != nil {
+		return LatestPage{}, err
+	}
+
+	var env latestEnvelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return LatestPage{}, fmt.Errorf("failed to unmarshal latest response: %w", err)
+	}
+	return LatestPage{Items: env.Data, HighWater: env.HighWater, Next: env.Next}, nil
+}
+
 func Get[P any](rdb *RDBridge, ctx context.Context, urn *urn.URN) (Raw[P], error) {
 	body, err := rdb.Get(ctx, urn)
 	if err != nil {
@@ -106,4 +242,59 @@ func Get[P any](rdb *RDBridge, ctx context.Context, urn *urn.URN) (Raw[P], error
 	}
 
 	return r, nil
+}
+
+// EnsureCompactedIndex declares the index a compacted view needs.
+//
+// Call it at startup, every startup: the bridge builds the index if it is
+// missing and does nothing if it is not, so there is no state to track and no
+// coordination between instances. Reports whether it had to build one.
+//
+// It is deliberately separate from reading. An index is a write, and a read
+// that quietly issues DDL on a caller's behalf surprises whoever is holding the
+// pager.
+func (b RDBridge) EnsureCompactedIndex(ctx context.Context, db, collection, field string) (created bool, err error) {
+	target := fmt.Sprintf("%s/%s/%s/compacted/%s/index",
+		b.endpoint, url.PathEscape(db), url.PathEscape(collection), url.PathEscape(field))
+
+	ctx, clientSpan := tel.TraceStart(
+		ctx,
+		fmt.Sprintf("HTTP PUT /%s/%s/compacted/%s/index", db, collection, field),
+		trace.WithSpanKind(trace.SpanKindClient),
+	)
+	defer clientSpan.End()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, target, nil)
+	if err != nil {
+		return false, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := httptel.NewHttpTelClient().Do(req)
+	if err != nil {
+		return false, fmt.Errorf("failed to ensure compacted index: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusAccepted:
+		// The build is running and outlasted the request. Nothing to wait for:
+		// the query is correct meanwhile, and a later startup will find it
+		// finished rather than starting a second one.
+		return false, nil
+	case http.StatusBadRequest:
+		return false, fmt.Errorf("%w: db=%q collection=%q field=%q", ErrBadRequest, db, collection, field)
+	default:
+		return false, fmt.Errorf("%w: status %d: %s", ErrServerErr, resp.StatusCode, body)
+	}
+
+	var env struct {
+		Index   string `json:"index"`
+		Created bool   `json:"created"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		return false, fmt.Errorf("failed to unmarshal index response: %w", err)
+	}
+	return env.Created, nil
 }

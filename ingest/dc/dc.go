@@ -50,19 +50,16 @@ func NewInput[P any](ctx context.Context, data P) Input[P] {
 
 type Dc[P any] struct {
 	config Env
-	pub    *qmill.QMill
 	input  chan Input[P]
 }
 
+// NewDc creates a collector pump. Raw payloads go to the raw writer over HTTP
+// (see Collection.Publish), so no message broker connection is opened here —
+// MQ_URI is only still on Env for collectors that publish to a queue of their
+// own.
 func NewDc[P any](ctx context.Context, config Env) *Dc[P] {
-	pub, err := PubFromEnv(ctx, config)
-	if err != nil {
-		logger.Get(ctx).Error("failed to initialize Dc pub", "err", err)
-		panic(err)
-	}
 	return &Dc[P]{
 		config: config,
-		pub:    pub,
 		input:  make(chan Input[P]),
 	}
 }
