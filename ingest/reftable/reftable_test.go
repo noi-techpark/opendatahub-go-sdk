@@ -6,6 +6,7 @@ package reftable
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -19,13 +20,22 @@ import (
 	"github.com/noi-techpark/opendatahub-go-sdk/ingest/rdb"
 )
 
-// fakeBridge serves /latest with the same compaction and paging contract as
+// fakeBridge serves the compacted route with the same contract as
 // raw-data-bridge, over documents shaped exactly as the pipeline stores them.
 //
 // The shape matters more than the logic. An earlier version of this fake
 // emitted an invented envelope, which let two real defects pass unnoticed: the
 // payload is base64, and the key is a root-level field rather than part of the
-// payload. See e2e_test.go for the check no fake can substitute for.
+// payload.
+//
+// It remains a model of the contract, not evidence about the server. What the
+// bridge actually does is pinned on its own side, against a real MongoDB and
+// through its real router — infrastructure-v2, raw-data-bridge, the
+// *_integration_test.go files. If the two ever disagree, that side is right.
+//
+// Documents carry the publisher's timestamp, which is what compaction picks the
+// newest by. Insertion order is deliberately not modelled: nothing in the client
+// depends on it.
 type fakeBridge struct {
 	mu        sync.Mutex
 	docs      []storedRow
@@ -52,6 +62,34 @@ func (f *fakeBridge) addRaw(key string, ts time.Time, doc json.RawMessage) {
 	f.docs = append(f.docs, storedRow{key, ts, doc})
 }
 
+// remove models an operator deleting a record outright, rather than publishing a
+// tombstone for it.
+func (f *fakeBridge) remove(key string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	kept := f.docs[:0]
+	for _, d := range f.docs {
+		if d.key != key {
+			kept = append(kept, d)
+		}
+	}
+	f.docs = kept
+}
+
+// encodeToken keeps the fake's cursor opaque, as the real one is: a fake whose
+// cursor is a bare key lets a client get away with parsing something it must not.
+func encodeToken(key string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(key))
+}
+
+func decodeToken(s string) (string, bool) {
+	b, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return "", false
+	}
+	return string(b), true
+}
+
 func (f *fakeBridge) handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
@@ -75,27 +113,24 @@ func (f *fakeBridge) handler() http.HandlerFunc {
 
 		q := r.URL.Query()
 
-		var since *time.Time
-		if s := q.Get("since"); s != "" {
-			ts, err := time.Parse(time.RFC3339, s)
-			if err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-			since = &ts
-		}
-		cursor := q.Get("cursor")
 		limit := 1000
 		if l := q.Get("limit"); l != "" {
 			fmt.Sscanf(l, "%d", &limit)
 		}
 
-		// newest row per key, with `since` applied before grouping
+		cursor := ""
+		if raw := q.Get("cursor"); raw != "" {
+			key, ok := decodeToken(raw)
+			if !ok {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			cursor = key
+		}
+
+		// newest row per key, by the publisher's timestamp
 		latest := map[string]storedRow{}
 		for _, d := range f.docs {
-			if since != nil && !d.ts.After(*since) {
-				continue
-			}
 			if prev, ok := latest[d.key]; !ok || !d.ts.Before(prev.ts) {
 				latest[d.key] = d
 			}
@@ -120,29 +155,22 @@ func (f *fakeBridge) handler() http.HandlerFunc {
 
 		next := ""
 		if f.stuckNext != "" {
-			next = f.stuckNext
+			next = encodeToken(f.stuckNext)
 			if len(selected) > limit {
 				selected = selected[:limit]
 			}
 		} else if len(selected) > limit {
 			selected = selected[:limit]
-			next = selected[len(selected)-1]
+			next = encodeToken(selected[len(selected)-1])
 		}
 
 		out := make([]json.RawMessage, 0, len(selected))
-		var high *time.Time
 		for _, k := range selected {
-			row := latest[k]
-			out = append(out, row.doc)
-			if high == nil || row.ts.After(*high) {
-				ts := row.ts
-				high = &ts
-			}
+			out = append(out, latest[k].doc)
 		}
 
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"field": field, "count": len(out),
-			"highWater": high, "next": next, "data": out,
+			"field": field, "count": len(out), "next": next, "data": out,
 		})
 	}
 }
@@ -243,7 +271,7 @@ func TestBootstrapRejectsNonAdvancingCursor(t *testing.T) {
 	}
 }
 
-func TestSweepAppliesOnlyChanges(t *testing.T) {
+func TestReconcileAppliesOnlyChanges(t *testing.T) {
 	now := time.Now().UTC()
 	f := &fakeBridge{}
 	f.add("A", "", payload("Ancient"), now.AddDate(-4, 0, 0))
@@ -256,11 +284,13 @@ func TestSweepAppliesOnlyChanges(t *testing.T) {
 	if err := tbl.bootstrap(ctx); err != nil {
 		t.Fatal(err)
 	}
-	hw := tbl.HighWater()
-
 	f.add("B", "", payload("second"), now.Add(time.Minute))
-	if err := tbl.sweep(ctx); err != nil {
-		t.Fatalf("sweep: %v", err)
+	changed, err := tbl.reconcile(ctx)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if changed != 1 {
+		t.Errorf("changed = %d, want 1: only B was edited", changed)
 	}
 
 	if v, _ := tbl.Get("B"); v.Name != "second" {
@@ -269,8 +299,10 @@ func TestSweepAppliesOnlyChanges(t *testing.T) {
 	if v, _ := tbl.Get("A"); v.Name != "Ancient" {
 		t.Error("A was lost by an incremental sweep")
 	}
-	if !tbl.HighWater().After(hw) {
-		t.Error("high-water mark did not advance")
+	// A reconcile that finds nothing new must report nothing changed, or every
+	// consumer rebuilds its world every few minutes for no reason.
+	if changed, err := tbl.reconcile(ctx); err != nil || changed != 0 {
+		t.Errorf("second reconcile: changed = %d, err = %v; want 0, nil", changed, err)
 	}
 }
 
@@ -290,7 +322,7 @@ func TestDeleteTombstoneRemovesKey(t *testing.T) {
 	}
 
 	f.add("A", OpDelete, "", now)
-	if err := tbl.sweep(ctx); err != nil {
+	if _, err := tbl.reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := tbl.Get("A"); ok {
@@ -413,5 +445,227 @@ func TestSchemaMismatchAndUnstampedRecordsAreRefused(t *testing.T) {
 	}
 	if _, ok := tbl.Get("wrong"); ok {
 		t.Error("a record with the wrong schema version was accepted")
+	}
+}
+
+// A reconcile re-reads everything, so a document's timestamp cannot hide it.
+//
+// A collector may publish at any moment carrying any timestamp: raw-writer-2
+// takes it from the request path, so a record written today may be dated last
+// year. Any incremental catch-up keyed on that timestamp steps straight over it
+// and never comes back. Re-reading the collection has no such failure mode, and
+// this test is the reason there is no incremental path to maintain.
+func TestReconcileSeesADocumentDatedInThePast(t *testing.T) {
+	now := time.Now().UTC()
+	f := &fakeBridge{}
+	f.add("A", "", payload("current"), now)
+
+	tbl, srv := newTable(t, f, Config{})
+	defer srv.Close()
+	ctx := context.Background()
+
+	if err := tbl.bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Written now, dated a year ago — below any event-time mark the bootstrap
+	// could have recorded.
+	f.add("B", "", payload("backfilled"), now.AddDate(-1, 0, 0))
+
+	if _, err := tbl.reconcile(ctx); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if v, ok := tbl.Get("B"); !ok || v.Name != "backfilled" {
+		t.Error("a document written after the mark but dated before it never reached the table; " +
+			"the sweep is resuming on the publisher's clock")
+	}
+}
+
+// A key that disappears from the collection has to disappear from the table.
+//
+// Merging each read into the live map instead of replacing it left such a key
+// behind for the life of the process: nothing ever removed it, because nothing
+// ever came back to say it was gone. Only an explicit tombstone could, and an
+// operator who deletes a record outright never publishes one.
+func TestReconcileDropsKeysThatLeftTheCollection(t *testing.T) {
+	now := time.Now().UTC()
+	f := &fakeBridge{}
+	f.add("A", "", payload("kept"), now)
+	f.add("B", "", payload("doomed"), now)
+
+	tbl, srv := newTable(t, f, Config{})
+	defer srv.Close()
+	ctx := context.Background()
+	if err := tbl.bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if tbl.Len() != 2 {
+		t.Fatalf("Len = %d, want 2", tbl.Len())
+	}
+
+	f.remove("B")
+	changed, err := tbl.reconcile(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tbl.Get("B"); ok {
+		t.Error("a key that is no longer in the collection is still in the table")
+	}
+	if changed != 1 {
+		t.Errorf("changed = %d, want 1: the removal is a change", changed)
+	}
+	if _, ok := tbl.Get("A"); !ok {
+		t.Error("the surviving key was dropped too")
+	}
+}
+
+// A reconcile that fails part way must leave the previous table serving.
+//
+// It builds the replacement beside the live one and swaps at the end, so there
+// is no window in which a reader sees a half-built map — and a failed read
+// changes nothing at all.
+func TestFailedReconcileLeavesTheTableIntact(t *testing.T) {
+	now := time.Now().UTC()
+	f := &fakeBridge{}
+	f.add("A", "", payload("one"), now.Add(-time.Hour))
+
+	tbl, srv := newTable(t, f, Config{})
+	defer srv.Close()
+	ctx := context.Background()
+	if err := tbl.bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	f.add("B", "", payload("two"), now)
+	f.mu.Lock()
+	f.fail = true
+	f.mu.Unlock()
+
+	if _, err := tbl.reconcile(ctx); err == nil {
+		t.Fatal("a failing reconcile reported success")
+	}
+	if v, ok := tbl.Get("A"); !ok || v.Name != "one" {
+		t.Error("a failed reconcile emptied or corrupted the table")
+	}
+
+	// And once the bridge recovers, nothing has been lost.
+	f.mu.Lock()
+	f.fail = false
+	f.mu.Unlock()
+	if _, err := tbl.reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tbl.Get("B"); !ok {
+		t.Error("the change missed by the failed reconcile was never picked up")
+	}
+}
+
+// A reconcile that keeps failing has to become visible. It used to leave nothing
+// behind but a repeating error line: the table went on serving what it last had,
+// no probe could tell, and nothing said how long it had been wrong.
+func TestSustainedReconcileFailureIsReportedAsStale(t *testing.T) {
+	f := &fakeBridge{}
+	f.add("A", "", payload("one"), time.Now().UTC())
+
+	tbl, srv := newTable(t, f, Config{Sweep: time.Hour, StaleAfter: time.Millisecond})
+	defer srv.Close()
+	ctx := context.Background()
+	set := NewSet(tbl)
+
+	if err := tbl.bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := tbl.Health(); err != nil {
+		t.Fatalf("a freshly bootstrapped table is unhealthy: %v", err)
+	}
+	if tbl.LastReconcile().IsZero() {
+		t.Error("bootstrap recorded no reconcile time")
+	}
+
+	f.mu.Lock()
+	f.fail = true
+	f.mu.Unlock()
+	time.Sleep(2 * time.Millisecond) // past the budget
+	tbl.refresh(ctx)
+
+	err := tbl.Health()
+	if err == nil {
+		t.Fatal("a table that has stopped reconciling reports itself healthy")
+	}
+	// The message has to carry how long, or an operator sees the same line
+	// whether the table is a minute behind or a week.
+	if !strings.Contains(err.Error(), "no successful reconcile for") {
+		t.Errorf("health error %q does not say how long the table has been behind", err)
+	}
+	if serr := set.Healthy(); serr == nil || !strings.Contains(serr.Error(), tbl.Name()) {
+		t.Errorf("Set.Healthy = %v, want it to name the stale table", serr)
+	}
+	// It still serves: being behind degrades the output, it does not empty it.
+	if _, ok := tbl.Get("A"); !ok {
+		t.Error("a stale table stopped answering lookups")
+	}
+
+	f.mu.Lock()
+	f.fail = false
+	f.mu.Unlock()
+	tbl.refresh(ctx)
+	if err := tbl.Health(); err != nil {
+		t.Errorf("the table recovered but still reports %v", err)
+	}
+	if err := set.Healthy(); err != nil {
+		t.Errorf("Set.Healthy = %v after recovery", err)
+	}
+}
+
+// A bridge that accepts the connection and never answers must not wedge the
+// refresher. The SDK's HTTP client sets no timeout, so without a deadline of its
+// own the loop would block on the socket — and since the loop is what reports
+// failures, the table would go quiet rather than go loud.
+func TestAHangingBridgeCannotWedgeTheRefresher(t *testing.T) {
+	// A handler that answers far later than the reconcile is allowed to wait. It
+	// sleeps rather than blocking on a channel, because Close waits for
+	// outstanding handlers and a handler that never returns wedges the test
+	// itself rather than the code under test.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(3 * time.Second)
+	}))
+	defer srv.Close()
+
+	tbl := New[enrichment](
+		rdb.NewRDBridge(rdb.Env{RAW_DATA_BRIDGE_ENDPOINT: srv.URL}),
+		Config{Name: "hanging", DB: "enrichment", Collection: "parking", Key: "key",
+			Sweep: time.Hour, ReconcileTimeout: 200 * time.Millisecond,
+			StaleAfter: time.Millisecond})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		tbl.refresh(context.Background())
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("refresh did not return: a hung bridge blocks the refresh loop indefinitely")
+	}
+	if err := tbl.Health(); err == nil {
+		t.Error("a table that never reconciled reports itself healthy")
+	}
+}
+
+// The defaults have to be usable without thinking about them.
+func TestStalenessDefaultsAreDerivedFromSweep(t *testing.T) {
+	tbl := New[enrichment](nil, Config{DB: "d", Collection: "c", Key: "k"})
+	if tbl.cfg.StaleAfter != DefaultStaleFactor*DefaultSweep {
+		t.Errorf("StaleAfter = %s, want %s", tbl.cfg.StaleAfter, DefaultStaleFactor*DefaultSweep)
+	}
+	if tbl.cfg.ReconcileTimeout != DefaultSweep {
+		t.Errorf("ReconcileTimeout = %s, want %s", tbl.cfg.ReconcileTimeout, DefaultSweep)
+	}
+	// A short sweep must not start cutting reconciles off at the knees.
+	short := New[enrichment](nil, Config{DB: "d", Collection: "c", Key: "k", Sweep: time.Second})
+	if short.cfg.ReconcileTimeout != MinReconcileTimeout {
+		t.Errorf("ReconcileTimeout = %s with a 1s sweep, want the %s floor",
+			short.cfg.ReconcileTimeout, MinReconcileTimeout)
 	}
 }

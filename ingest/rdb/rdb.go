@@ -40,16 +40,22 @@ type Raw[Rawtype any] struct {
 	// sent.
 	//
 	// This is the only place a collector can put a field the database is able to
-	// group on, which is what makes keyed lookups (RDBridge.GetLatest) possible
+	// group on, which is what makes keyed lookups (RDBridge.GetCompacted) possible
 	// without reaching into the payload.
 	Meta map[string]string `json:"meta,omitempty"`
 }
 
 var (
 	ErrDocumentNotFound = errors.New("document not found")
-	ErrBadURN           = errors.New("bad urn format")
-	ErrBadRequest       = errors.New("bad request")
-	ErrServerErr        = errors.New("internal server error")
+
+	// ErrCollectionNotFound means the collection does not exist, which is a
+	// different fact from it being empty. A consumer that treats the two alike
+	// cannot see a typo in its own configuration: it builds an empty table and
+	// reports success.
+	ErrCollectionNotFound = errors.New("collection not found")
+	ErrBadURN             = errors.New("bad urn format")
+	ErrBadRequest         = errors.New("bad request")
+	ErrServerErr          = errors.New("internal server error")
 )
 
 type Env struct {
@@ -110,9 +116,23 @@ func (b RDBridge) Get(ctx context.Context, urn *urn.URN) ([]byte, error) {
 	return body, nil
 }
 
-// LatestQuery addresses the compacted view of a raw data collection: the newest
-// document for every distinct value of a BSON field.
-type LatestQuery struct {
+// Page is one page of a collection view. Items are whole documents, undecoded:
+// their layout is the publisher's choice — identifying fields at the root, the
+// payload in `rawdata`, possibly base64-encoded — so the client does not presume
+// a shape.
+//
+// Next is empty when the walk is complete. It is opaque: the bridge derives it
+// beside the ordering that produced it, so hand back the previous page's Next
+// unchanged and do not attempt to construct one. A cursor issued for one
+// ordering is refused by any other with 400.
+type Page struct {
+	Items []json.RawMessage
+	Next  string
+}
+
+// CompactedQuery addresses the compacted view of a raw data collection: the
+// newest document for every distinct value of a field under `meta`.
+type CompactedQuery struct {
 	DB         string
 	Collection string
 	// Field names a field inside the stored document's `meta` sub-document,
@@ -121,113 +141,115 @@ type LatestQuery struct {
 	// nothing inside it can be grouped on, and the rest of the root belongs to
 	// the writer. A collector sets it by sending an X-OpenDataHub-<Field>
 	// header.
-	Field string
-	// Since and Until bound the scan by write time: Since is exclusive, Until
-	// inclusive, so consecutive windows tile without gaps or overlap. Use them
-	// to catch up, or to step through the log a window at a time.
-	//
-	// They are filters, not cursors, and are applied before grouping — so a
-	// bounded query returns the newest document per key *within the window*. A
-	// key written years ago and never touched since still has a current value,
-	// so a consumer starting cold must leave both unset and page through the
-	// whole compacted set.
-	Since *time.Time
-	Until *time.Time
-	// Cursor continues a previous page. It is opaque — the bridge derives it
-	// beside the ordering that produced it, so pass back the previous page's
-	// Next unchanged and do not attempt to construct one.
+	Field  string
 	Cursor string
 	Limit  int
 }
 
-// LatestPage is one page of a compacted collection view.
-//
-// Items are whole documents, undecoded. Their layout is the publisher's
-// choice — the identifying fields live at the root and the payload sits in
-// `rawdata`, possibly base64-encoded — so the client does not presume a shape.
-type LatestPage struct {
-	Items []json.RawMessage
-	// HighWater is the newest write observed in this page. Store it and pass it
-	// back as LatestQuery.Since to pick up only subsequent changes.
-	HighWater *time.Time
-	// Next is empty when the walk is complete.
-	Next string
+// DocumentsQuery addresses a collection's log: every revision, newest written
+// first.
+type DocumentsQuery struct {
+	DB         string
+	Collection string
+	Cursor     string
+	Limit      int
 }
 
-type latestEnvelope struct {
-	Field     string            `json:"field"`
-	Count     int               `json:"count"`
-	HighWater *time.Time        `json:"highWater"`
-	Next      string            `json:"next"`
-	Data      []json.RawMessage `json:"data"`
+type envelope struct {
+	Field string            `json:"field"`
+	Count int               `json:"count"`
+	Next  string            `json:"next"`
+	Data  []json.RawMessage `json:"data"`
 }
 
-func (b RDBridge) getLatest(ctx context.Context, q LatestQuery) ([]byte, error) {
-	params := url.Values{}
-	if q.Since != nil {
-		params.Set("since", q.Since.UTC().Format(time.RFC3339))
-	}
-	if q.Until != nil {
-		params.Set("until", q.Until.UTC().Format(time.RFC3339))
-	}
-	if q.Cursor != "" {
-		params.Set("cursor", q.Cursor)
-	}
-	if q.Limit > 0 {
-		params.Set("limit", strconv.Itoa(q.Limit))
+func (b RDBridge) getPage(ctx context.Context, span, path string, params url.Values) (Page, error) {
+	target := b.endpoint + path
+	if q := params.Encode(); q != "" {
+		target += "?" + q
 	}
 
-	target := fmt.Sprintf("%s/%s/%s/compacted/%s?%s",
-		b.endpoint, url.PathEscape(q.DB), url.PathEscape(q.Collection),
-		url.PathEscape(q.Field), params.Encode())
-
-	ctx, clientSpan := tel.TraceStart(
-		ctx,
-		fmt.Sprintf("HTTP GET /%s/%s/compacted/%s", q.DB, q.Collection, q.Field),
-		trace.WithSpanKind(trace.SpanKindClient),
-	)
+	ctx, clientSpan := tel.TraceStart(ctx, "HTTP GET "+span, trace.WithSpanKind(trace.SpanKindClient))
 	defer clientSpan.End()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", target, nil)
 	if err != nil {
 		tel.OnError(ctx, "failed to create request", err)
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return Page{}, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	resp, err := httptel.NewHttpTelClient().Do(req)
 	if err != nil {
-		tel.OnError(ctx, "failed to get latest raw data", err)
-		return nil, fmt.Errorf("failed to get latest raw data: %w", err)
+		tel.OnError(ctx, "failed to get raw data page", err)
+		return Page{}, fmt.Errorf("failed to get raw data page: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusBadRequest {
-		return nil, fmt.Errorf("%w: db=%q collection=%q field=%q", ErrBadRequest, q.DB, q.Collection, q.Field)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%w: status %d", ErrServerErr, resp.StatusCode)
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusBadRequest:
+		return Page{}, fmt.Errorf("%w: GET %s", ErrBadRequest, path)
+	case http.StatusNotFound:
+		return Page{}, fmt.Errorf("%w: GET %s", ErrCollectionNotFound, path)
+	default:
+		return Page{}, fmt.Errorf("%w: status %d", ErrServerErr, resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		tel.OnError(ctx, "failed to read latest raw data body", err)
-		return nil, fmt.Errorf("failed to read latest raw data body: %w", err)
+		tel.OnError(ctx, "failed to read raw data page", err)
+		return Page{}, fmt.Errorf("failed to read raw data page: %w", err)
 	}
-	return body, nil
+	var env envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return Page{}, fmt.Errorf("failed to unmarshal raw data page: %w", err)
+	}
+	return Page{Items: env.Data, Next: env.Next}, nil
 }
 
-// GetLatest fetches one page of a collection's compacted view.
-func (b RDBridge) GetLatest(ctx context.Context, q LatestQuery) (LatestPage, error) {
-	body, err := b.getLatest(ctx, q)
-	if err != nil {
-		return LatestPage{}, err
+func paging(cursor string, limit int) url.Values {
+	params := url.Values{}
+	if cursor != "" {
+		params.Set("cursor", cursor)
 	}
+	if limit > 0 {
+		params.Set("limit", strconv.Itoa(limit))
+	}
+	return params
+}
 
-	var env latestEnvelope
-	if err := json.Unmarshal(body, &env); err != nil {
-		return LatestPage{}, fmt.Errorf("failed to unmarshal latest response: %w", err)
+// GetCompacted fetches one page of a collection's compacted view.
+//
+// Walking every page yields the current value of every key, which is the whole
+// of a reference table. Reconciling means walking again: the walk is the entire
+// state, so a re-read cannot miss a change however it was written or dated.
+func (b RDBridge) GetCompacted(ctx context.Context, q CompactedQuery) (Page, error) {
+	path := fmt.Sprintf("/%s/%s/compacted/%s",
+		url.PathEscape(q.DB), url.PathEscape(q.Collection), url.PathEscape(q.Field))
+	return b.getPage(ctx, path, path, paging(q.Cursor, q.Limit))
+}
+
+// GetDocuments fetches one page of a collection's log, newest written first.
+//
+// "Newest" is write order, not the publisher's timestamp: a backfill is written
+// now and dated whenever the collector chose, so it leads the list carrying an
+// old timestamp.
+func (b RDBridge) GetDocuments(ctx context.Context, q DocumentsQuery) (Page, error) {
+	path := fmt.Sprintf("/%s/%s/documents",
+		url.PathEscape(q.DB), url.PathEscape(q.Collection))
+	return b.getPage(ctx, path, path, paging(q.Cursor, q.Limit))
+}
+
+// GetLastDocument returns the most recently written document in a collection, or
+// ErrDocumentNotFound if there is none. The collection still has to exist.
+func (b RDBridge) GetLastDocument(ctx context.Context, db, collection string) (json.RawMessage, error) {
+	page, err := b.GetDocuments(ctx, DocumentsQuery{DB: db, Collection: collection, Limit: 1})
+	if err != nil {
+		return nil, err
 	}
-	return LatestPage{Items: env.Data, HighWater: env.HighWater, Next: env.Next}, nil
+	if len(page.Items) == 0 {
+		return nil, ErrDocumentNotFound
+	}
+	return page.Items[0], nil
 }
 
 func Get[P any](rdb *RDBridge, ctx context.Context, urn *urn.URN) (Raw[P], error) {

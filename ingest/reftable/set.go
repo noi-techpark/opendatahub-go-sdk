@@ -21,6 +21,7 @@ import (
 // created by this package can satisfy it.
 type Loader interface {
 	Name() string
+	Health() error
 	bootstrap(context.Context) error
 	subscribe(context.Context) error
 	run(context.Context)
@@ -102,6 +103,22 @@ func (s *Set) Start(ctx context.Context) error {
 	}
 	log.Info("reference tables ready", "tables", names)
 	return nil
+}
+
+// Healthy reports nil while every table is current, and otherwise names the ones
+// that are behind and for how long.
+//
+// This is what a liveness or readiness probe should read. A table that stops
+// reconciling keeps serving whatever it last had, so without asking, a process
+// looks healthy while it publishes from configuration that may be hours out of
+// date. What to do about it is the consumer's call — a reference table that is
+// behind degrades the output, while exiting stops it altogether.
+func (s *Set) Healthy() error {
+	errs := make([]error, 0, len(s.tables))
+	for _, t := range s.tables {
+		errs = append(errs, t.Health())
+	}
+	return errors.Join(errs...)
 }
 
 // Close stops the background refreshers and releases each table. It is safe to
