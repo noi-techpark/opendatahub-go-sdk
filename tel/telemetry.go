@@ -64,6 +64,7 @@ func NewTelemetry(ctx context.Context, cfg Config) (TelemetryProvider, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tracer: %w", err)
 		}
+		tel.tp = tp
 		tel.tracer = tp.Tracer(cfg.ServiceName)
 
 		// GLOBAL propagator
@@ -83,6 +84,7 @@ func NewTelemetry(ctx context.Context, cfg Config) (TelemetryProvider, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tracer: %w", err)
 		}
+		tel.mp = mp
 		tel.meter = mp.Meter(cfg.ServiceName)
 		otel.SetMeterProvider(mp)
 		slog.Info(fmt.Sprintf("started telemetry meter with mode %s", cfg.MetricsExportMode))

@@ -43,6 +43,12 @@ Content API client library. Provides a configurable HTTP client for the OpenData
 
 Pluggable preconfigured Telemetry provider (tracing, metrics and logging).
 
+- `tel/http`: gin middleware and a trace-propagating `RoundTripper`.
+- `tel/stdhttp`: the same for plain `net/http`, without gin. `Middleware` gives
+  each request a server span named after the `ServeMux` route, a logger with
+  the trace id, the request metrics, an access-log line and panic recovery;
+  `Transport` opens a client span per outgoing call and propagates the trace.
+
 ## Package `testsuite`
 
 Helpers for testing OpenDataHub related logics.
