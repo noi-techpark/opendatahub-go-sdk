@@ -65,3 +65,37 @@ func TestBootstrapAcceptsAnEmptyCollection(t *testing.T) {
 		t.Errorf("keys = %d, want 0", tbl.Len())
 	}
 }
+
+// A consumer that publishes unchanged without records may start before the
+// first record exists, and picks it up once the collection appears.
+func TestAllowMissingReadsAMissingCollectionAsEmpty(t *testing.T) {
+	exists := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !exists {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"count":1,"field":"key","next":"","data":[` +
+			`{"meta":{"key":"a"},"rawdata":"{\"v\":1}","bsontimestamp":"2026-01-01T00:00:00Z"}]}`))
+	}))
+	defer srv.Close()
+
+	tbl := New[map[string]any](
+		rdb.NewRDBridge(rdb.Env{RAW_DATA_BRIDGE_ENDPOINT: srv.URL}),
+		Config{Name: "enrichment", DB: "enrichment", Collection: "new", Key: "key", AllowMissing: true})
+
+	if err := tbl.bootstrap(context.Background()); err != nil {
+		t.Fatalf("bootstrap with AllowMissing must accept a missing collection, got %v", err)
+	}
+	if tbl.Len() != 0 {
+		t.Errorf("keys = %d, want 0", tbl.Len())
+	}
+
+	exists = true
+	if _, err := tbl.reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if _, ok := tbl.Get("a"); !ok {
+		t.Error("a record published after start was not picked up")
+	}
+}

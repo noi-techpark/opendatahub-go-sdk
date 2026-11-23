@@ -69,6 +69,14 @@ type Config struct {
 	// Schema, when set, is compared against the document's `meta.schema` field.
 	Schema string
 
+	// AllowMissing makes a collection that does not exist read as an empty
+	// table instead of failing the bootstrap. Set it only where an empty table
+	// is a correct state, e.g. a consumer that publishes unchanged without
+	// records: there the first record must not have to exist before the
+	// consumer may start. Left false, a missing collection stops the process,
+	// since it is far more often a misspelt DB or Collection.
+	AllowMissing bool
+
 	// Decode reads the stored `rawdata` value. Defaults to DecodeText, which is
 	// what raw-writer-2 stores for textual payloads; use DecodeBase64 for the
 	// legacy rest-push encoding, or DecodeJSON when the payload was stored as an
@@ -398,6 +406,9 @@ func (t *Table[T]) reconcile(ctx context.Context) (int, error) {
 			Limit:      t.cfg.PageLimit,
 		})
 		if err != nil {
+			if cursor == "" && t.cfg.AllowMissing && errors.Is(err, rdb.ErrCollectionNotFound) {
+				break
+			}
 			return 0, err
 		}
 
